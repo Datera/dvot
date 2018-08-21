@@ -9,7 +9,7 @@ setup(
     long_description='Install Instructions: sudo python setup.py install',
     author='Datera Ecosystem Team',
     author_email='support@datera.io',
-    packages=['dbmp'],
+    packages=['dvot'],
     package_dir={'': 'src'},
     install_requires=[],
     scripts=[],
