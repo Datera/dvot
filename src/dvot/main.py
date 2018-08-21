@@ -4,12 +4,19 @@ from __future__ import unicode_literals, print_function, division
 
 import argparse
 import sys
+import threading
+import time
+try:
+    import queue
+except ImportError:
+    import Queue as queue
 
 from dfs_sdk import scaffold
-from dvot.utils import exe
+from dvot.utils import exe, Parallel
 
 SUCCESS = 0
 FAILURE = 1
+MAX_WORKERS = 20
 
 
 def run_health(api):
@@ -40,13 +47,156 @@ def run_health(api):
     return True
 
 
+def find_vol(api, name, oid):
+    if (name and oid) or (not name and not oid):
+        raise ValueError("Either --name or --id MUST be provided")
+
+    def _vol_helper(q, found):
+        while len(found) == 0:
+            ai = q.get()
+            for si in ai.storage_instances.list():
+                for vol in si.volumes.list():
+                    if vol['uuid'] == oid or vol['name'] == name:
+                        found.append(vol)
+            q.task_done()
+    found = []
+    q = queue.Queue()
+    for ai in api.app_instances.list():
+        q.put(ai)
+    workers = max(q.qsize(), MAX_WORKERS)
+    for _ in range(workers):
+        thread = threading.Thread(target=_vol_helper, args=(q, found))
+        thread.daemon = True
+        thread.start()
+    while not (q.unfinished_tasks == 0 or len(found) > 0):
+        time.sleep(0.2)
+    if found:
+        return found[0]
+
+
+def find_snap(api, ts):
+    if not ts:
+        raise ValueError("You must specify --id when using find-snap")
+
+    def _snap_helper(q, found):
+        while len(found) == 0:
+            ai = q.get()
+            for snap in ai.snapshots.list():
+                if snap['utc_ts'] == ts or snap['uuid'] == ts:
+                    found.append(snap)
+                    q.task_done()
+                    return
+            for si in ai.storage_instances.list():
+                for vol in si.volumes.list():
+                    for snap in vol.snapshots.list():
+                        if snap['utc_ts'] == ts or snap['uuid'] == ts:
+                            found.append(snap)
+            q.task_done()
+    found = []
+    q = queue.Queue()
+    for ai in api.app_instances.list():
+        q.put(ai)
+    workers = max(q.qsize(), MAX_WORKERS)
+    for _ in range(workers):
+        thread = threading.Thread(target=_snap_helper, args=(q, found))
+        thread.daemon = True
+        thread.start()
+    while not (q.unfinished_tasks == 0 or len(found) > 0):
+        time.sleep(0.2)
+    if found:
+        return found[0]
+
+
+def find_app(api, name, oid):
+    if (name and oid) or (not name and not oid):
+        raise ValueError("Either --name or --id MUST be provided")
+    for ai in api.app_instances.list():
+        if ai.name == name or ai.id == oid:
+            return ai
+
+
+def find_snaps(api):
+    def _snap_helper(ai, app_snaps, vol_snaps):
+        app_snaps.extend(ai.snapshots.list())
+        for si in ai.storage_instances.list():
+            for vol in si.volumes.list():
+                vol_snaps.extend(vol.snapshots.list())
+    app_snaps, vol_snaps = [], []
+    args_list = [(ai, app_snaps, vol_snaps)
+                 for ai in api.app_instances.list()]
+    funcs = [_snap_helper] * len(args_list)
+    p = Parallel(funcs,
+                 args_list=args_list,
+                 max_workers=max(len(funcs), MAX_WORKERS))
+    p.run_threads()
+    return app_snaps, vol_snaps
+
+
+def make_snap(api, name, oid):
+    if (name and oid) or (not name and not oid):
+        raise ValueError("Either --name or --id MUST be provided")
+    ai = find_app(api, name, oid)
+    if ai:
+        return ai.snapshots.create()
+    vol = find_vol(api, name, oid)
+    if vol:
+        return vol.snapshots.create()
+
+
 def main(args):
     api = scaffold.get_api()
     print('Using Config:')
     scaffold.print_config()
 
-    if args.health_check:
+    if args.op == 'health-check':
         run_health(api)
+    elif args.op == 'list-snaps':
+        app_snaps, vol_snaps = find_snaps(api)
+        print("App Snaps")
+        print("=========")
+        for snap in app_snaps:
+            print(snap.path, snap.op_state)
+        print("Vol Snaps")
+        print("=========")
+        for snap in vol_snaps:
+            print(snap.path, snap.op_state)
+    elif args.op == 'make-snap':
+        snap = make_snap(api, args.name, args.id)
+        if snap:
+            print("Created snapshot:", snap.path)
+        else:
+            print("No AppInstance or Volume found with name {} or id {}"
+                  "".format(args.name, args.id))
+    elif args.op == 'find-vol':
+        vol = find_vol(api, args.name, args.id)
+        if vol:
+            print("Found volume:", vol['name'])
+            print("=============")
+            print(vol)
+        else:
+            print("No volume found matching name {} or id {}".format(
+                args.name, args.id))
+            return FAILURE
+    elif args.op == 'find-app':
+        ai = find_app(api, args.name, args.id)
+        if ai:
+            print("Found AppInstance:", ai['name'])
+            print("=============")
+            print(ai)
+        else:
+            print("No AppInstance found matching name {} or id {}".format(
+                args.name, args.id))
+            return FAILURE
+    elif args.op == 'find-snap':
+        snap = find_snap(api, args.id)
+        if snap:
+            print("Found Snapshot:", args.id)
+            print("=============")
+            print(snap)
+        else:
+            print("No AppInstance found matching name {} or id {}".format(
+                args.name, args.id))
+            return FAILURE
 
     return SUCCESS
 
@@ -55,12 +205,14 @@ if __name__ == '__main__':
     tparser = scaffold.get_argparser(add_help=False)
     parser = argparse.ArgumentParser(
         parents=[tparser], formatter_class=argparse.RawTextHelpFormatter)
-
-    parser.add_argument()
-    parser.add_argument()
-    parser.add_argument()
-    parser.add_argument()
-    parser.add_argument()
+    parser.add_argument('op', choices=('health-check',
+                                       'make-snap',
+                                       'list-snaps',
+                                       'find-vol',
+                                       'find-app',
+                                       'find-snap'))
+    parser.add_argument('--name')
+    parser.add_argument('--id')
 
     args = parser.parse_args()
     sys.exit(main(args))
