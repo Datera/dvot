@@ -17,12 +17,9 @@ from time import sleep
 
 from six import reraise as raise_
 from six.moves import zip_longest
-import paramiko
 from dfs_sdk import scaffold
 
-from dbmp.topology import get_topology
-
-DBMP_REPO = 'http://github.com/Datera/dbmp'
+DVOT_REPO = 'http://github.com/Datera/dvot'
 ASSETS = os.path.join(
         os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))), 'assets')
@@ -164,24 +161,6 @@ def exe(cmd, fail_ok=False):
             return None
         raise EnvironmentError(
             "Encountered error running command: {}, error : {}".format(cmd, e))
-
-
-def get_ssh(host):
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(
-        paramiko.AutoAddPolicy())
-    user, ip, creds = get_topology(host)
-    if os.path.exists(creds):
-        ssh.connect(hostname=ip,
-                    username=user,
-                    banner_timeout=60,
-                    pkey=paramiko.RSAKey.from_private_key_file(creds))
-    else:
-        ssh.connect(hostname=ip,
-                    username=user,
-                    password=creds,
-                    banner_timeout=60)
-    return ssh
 
 
 def rand_file_name(directory):

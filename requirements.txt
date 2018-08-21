@@ -1,5 +1,4 @@
 ipaddress
-paramiko
 requests
 six
 tabulate
