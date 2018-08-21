@@ -3,6 +3,7 @@
 from __future__ import unicode_literals, print_function, division
 
 import argparse
+import re
 import sys
 import threading
 import time
@@ -17,6 +18,11 @@ from dvot.utils import exe, Parallel
 SUCCESS = 0
 FAILURE = 1
 MAX_WORKERS = 20
+
+
+VOL_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/storage_instances/"
+                         "(?P<si>.*)/volumes/(?P<vol>.*)/snapshots/(?P<ts>.*)")
+AI_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/snapshots/(?P<ts>.*)")
 
 
 def run_health(api):
@@ -143,6 +149,54 @@ def make_snap(api, name, oid):
         return vol.snapshots.create()
 
 
+def restore(api, name, oid):
+    if (name and oid) or (not name and not oid):
+        raise ValueError("Either --name or --id MUST be provided")
+    oid = name if not oid else oid
+    snap = find_snap(api, oid)
+    if not snap:
+        print("No Snapshot found matching name {} or id {}".format(name, oid))
+        return
+    path = snap.path
+    match = VOL_SNAP_RE.match(path)
+    print("Restoring:", snap.path)
+    if match:
+        ai_id = match.group('ai')
+        si_id = match.group('si')
+        vol_id = match.group('vol')
+        ts = match.group('ts')
+        ai = api.app_instances.get(ai_id)
+        ai.set(admin_state='offline')
+        si = ai.storage_instances.get(si_id)
+        vol = si.volumes.get(vol_id)
+        vol.set(restore_point=ts)
+        ai.set(admin_state='online')
+        _obj_poll(si)
+    else:
+        match = AI_SNAP_RE.match(path)
+        ai_id = match.group('ai')
+        ts = match.group('ts')
+        ai = api.app_instances.get(ai_id)
+        ai.set(admin_state='offline')
+        ai.set(restore_point=ts)
+        ai.set(admin_state='online')
+        # Nothing to poll on AppInstance level snapshots
+
+
+def _obj_poll(obj):
+    timeout = 10
+    while True:
+        obj = obj.reload()
+        if obj['op_state'] == 'available':
+            break
+        if not timeout:
+            raise EnvironmentError(
+                "Polling ended before object {} was still "
+                "unavailable".format(obj.path))
+        time.sleep(1)
+        timeout -= 1
+
+
 def main(args):
     api = scaffold.get_api()
     print('Using Config:')
@@ -167,6 +221,9 @@ def main(args):
         else:
             print("No AppInstance or Volume found with name {} or id {}"
                   "".format(args.name, args.id))
+            return FAILURE
+    elif args.op == 'restore':
+        restore(api, args.name, args.id)
     elif args.op == 'find-vol':
         vol = find_vol(api, args.name, args.id)
         if vol:
@@ -194,7 +251,7 @@ def main(args):
             print("=============")
             print(snap)
         else:
-            print("No AppInstance found matching name {} or id {}".format(
+            print("No Snapshot found matching name {} or id {}".format(
                 args.name, args.id))
             return FAILURE
 
@@ -210,9 +267,11 @@ if __name__ == '__main__':
                                        'list-snaps',
                                        'find-vol',
                                        'find-app',
-                                       'find-snap'))
+                                       'find-snap',
+                                       'restore'))
     parser.add_argument('--name')
     parser.add_argument('--id')
+    parser.add_argument('--no-multipath')
 
     args = parser.parse_args()
     sys.exit(main(args))
