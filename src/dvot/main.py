@@ -415,11 +415,18 @@ def main(args):
         print(found)
 
     if (args.mount or args.login) and found:
+        ais = []
         if hasattr(found, 'utc_ts'):
             ai = new_app_from_snap(api, found)
         else:
             ai = api.app_instances.get(found.path.split('/')[2])
-        mount_volumes(api, [ai], not args.no_multipath, args.fstype,
+            if args.all_snaps:
+                app_snaps, vol_snaps = find_snaps(api, None, ai.id)
+                for snap in app_snaps + vol_snaps:
+                    ais.append(new_app_from_snap(api, snap))
+            else:
+                ais.append(ai)
+        mount_volumes(api, ais, not args.no_multipath, args.fstype,
                       args.fsargs, args.directory, 1, args.login)
     elif args.clean and found:
         if hasattr(found, 'utc_ts'):
@@ -488,6 +495,8 @@ if __name__ == '__main__':
                                 ' the args you are passing in'))
     parser.add_argument('--directory', default='/mnt',
                         help='Directory under which to mount devices')
+    parser.add_argument('--all-snaps', action='store_true',
+                        help='For use with --mount/--login')
 
     args = parser.parse_args()
     sys.exit(main(args))
