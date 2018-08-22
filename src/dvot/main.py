@@ -176,9 +176,10 @@ def make_snap(api, name, oid):
         return vol.snapshots.create()
 
 
-def restore(api, name, oid):
-    if (name and oid) or (not name and not oid):
-        raise ValueError("Either --name or --id MUST be provided")
+def restore(api, name, oid, path, directory, multipath, fstype, fsargs, login):
+    if not any((name, oid)) and not all((name, oid)):
+        raise ValueError(
+            "One of --name, --id of the snapshot MUST be provided")
     oid = name if not oid else oid
     snap = find_snap(api, oid)
     if not snap:
@@ -193,20 +194,30 @@ def restore(api, name, oid):
         vol_id = match.group('vol')
         ts = match.group('ts')
         ai = api.app_instances.get(ai_id)
-        ai.set(admin_state='offline')
+        if path:
+            clean_mounts(api, [ai], directory, 1)
+        ai.set(admin_state='offline', force=True)
         si = ai.storage_instances.get(si_id)
         vol = si.volumes.get(vol_id)
         vol.set(restore_point=ts)
         ai.set(admin_state='online')
         _obj_poll(si)
+        if path:
+            mount_volumes(api, [ai], multipath, fstype, fsargs, directory,
+                          1, login)
     else:
         match = AI_SNAP_RE.match(path)
         ai_id = match.group('ai')
         ts = match.group('ts')
         ai = api.app_instances.get(ai_id)
-        ai.set(admin_state='offline')
+        if path:
+            clean_mounts(api, [ai], directory, 1)
+        ai.set(admin_state='offline', force=True)
         ai.set(restore_point=ts)
         ai.set(admin_state='online')
+        if path:
+            mount_volumes(api, [ai], multipath, fstype, fsargs, directory,
+                          1, login)
         # Nothing to poll on AppInstance level snapshots
 
 
@@ -326,13 +337,14 @@ def main(args):
     elif args.op == 'make-snap':
         found = make_snap(api, args.name, args.id)
         if found:
-            print("Created snapshot:", snap.path)
+            print("Created snapshot:", found.path)
         else:
             print("No AppInstance or Volume found with name {} or id {}"
                   "".format(args.name, args.id))
             return FAILURE
     elif args.op == 'restore':
-        restore(api, args.name, args.id)
+        restore(api, args.name, args.id, args.path, args.directory,
+                not args.no_multipath, args.fstype, args.fsargs, args.login)
     elif args.op == 'find-vol':
         found = find_vol(api, args.name, args.id)
         if found:
@@ -369,11 +381,10 @@ def main(args):
         found = find_from_mount(api, args.path)
         print("Found Volume:", found['name'])
         print("============")
-        print(found)
     elif args.op == 'find-from-device-path':
         if not args.path:
             raise ValueError("find-from-device-path requires --path argument")
-        found = find_from_device_path(api, args.path)
+        found = find_from_device_path(args.path)
         print("Found Volume:", found['name'])
         print("============")
         print(found)
@@ -416,6 +427,8 @@ if __name__ == '__main__':
     find a Volume from the specified mount path
 * find-from-device-path
     same as find-from-mount but with device-path
+* restore
+    restore a volume to a snapshot.
     """
     parser.add_argument('op', choices=('health-check',
                                        'make-snap',
