@@ -5,6 +5,7 @@ from __future__ import unicode_literals, print_function, division
 import argparse
 import re
 import sys
+import textwrap
 import threading
 import time
 try:
@@ -14,6 +15,7 @@ except ImportError:
 
 from dfs_sdk import scaffold
 from dvot.utils import exe, Parallel
+from dvot.mount import mount_volumes, clean_mounts
 
 SUCCESS = 0
 FAILURE = 1
@@ -23,6 +25,10 @@ MAX_WORKERS = 20
 VOL_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/storage_instances/"
                          "(?P<si>.*)/volumes/(?P<vol>.*)/snapshots/(?P<ts>.*)")
 AI_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/snapshots/(?P<ts>.*)")
+
+
+def hf(txt):
+    return textwrap.fill(txt)
 
 
 def run_health(api):
@@ -183,6 +189,21 @@ def restore(api, name, oid):
         # Nothing to poll on AppInstance level snapshots
 
 
+def new_app_from_snap(api, snap):
+    print("Creating new AppInstance:", snap.path)
+    name = 'ai-from-snap-{}'.format(snap['utc_ts'])
+    return api.app_instances.create(name=name,
+                                    clone_snapshot_src={'path': snap.path})
+
+
+def find_from_mount(api, mount):
+    pass
+
+
+def find_from_device_path(api, device_path):
+    pass
+
+
 def _obj_poll(obj):
     timeout = 10
     while True:
@@ -197,11 +218,52 @@ def _obj_poll(obj):
         timeout -= 1
 
 
+def print_pretty_snaps(api, app_snaps, vol_snaps):
+    def _psnap_helper(api, snap, results):
+        path = snap.path
+        match = VOL_SNAP_RE.match(path)
+        if match:
+            ai_id = match.group('ai')
+            si_id = match.group('si')
+            vol_id = match.group('vol')
+            ts = match.group('ts')
+            ai = api.app_instances.get(ai_id)
+            si = ai.storage_instances.get(si_id)
+            vol = si.volumes.get(vol_id)
+            s = '{} -- {} -- {} -- {}'.format(
+                ai.name, si.name, vol.name, ts)
+            results[1].append(s)
+        else:
+            match = AI_SNAP_RE.match(path)
+            ai_id = match.group('ai')
+            ts = match.group('ts')
+            ai = api.app_instances.get(ai_id)
+            s = '{} -- {}'.format(ai.name, ts)
+            results[0].append(s)
+    results = [[], []]
+    funcs = [_psnap_helper] * (len(app_snaps) + len(vol_snaps))
+    sn = app_snaps + vol_snaps
+    args_list = [(api, snap, results) for snap in sn]
+    p = Parallel(funcs, args_list=args_list,
+                 max_workers=max(len(funcs), MAX_WORKERS))
+    p.run_threads()
+    na, nv = results
+    print("App Snaps")
+    print("=========")
+    for snap in sorted(na):
+        print(snap)
+    print("\nVol Snaps")
+    print("=========")
+    for snap in sorted(nv):
+        print(snap)
+
+
 def main(args):
     api = scaffold.get_api()
     print('Using Config:')
     scaffold.print_config()
 
+    found = None
     if args.op == 'health-check':
         run_health(api)
     elif args.op == 'list-snaps':
@@ -210,13 +272,16 @@ def main(args):
         print("=========")
         for snap in app_snaps:
             print(snap.path, snap.op_state)
-        print("Vol Snaps")
+        print("\nVol Snaps")
         print("=========")
         for snap in vol_snaps:
             print(snap.path, snap.op_state)
+    elif args.op == 'list-snaps-pretty':
+        app_snaps, vol_snaps = find_snaps(api)
+        print_pretty_snaps(api, app_snaps, vol_snaps)
     elif args.op == 'make-snap':
-        snap = make_snap(api, args.name, args.id)
-        if snap:
+        found = make_snap(api, args.name, args.id)
+        if found:
             print("Created snapshot:", snap.path)
         else:
             print("No AppInstance or Volume found with name {} or id {}"
@@ -225,35 +290,53 @@ def main(args):
     elif args.op == 'restore':
         restore(api, args.name, args.id)
     elif args.op == 'find-vol':
-        vol = find_vol(api, args.name, args.id)
-        if vol:
-            print("Found volume:", vol['name'])
+        found = find_vol(api, args.name, args.id)
+        if found:
+            print("Found volume:", found['name'])
             print("=============")
-            print(vol)
+            print(found)
         else:
             print("No volume found matching name {} or id {}".format(
                 args.name, args.id))
             return FAILURE
     elif args.op == 'find-app':
-        ai = find_app(api, args.name, args.id)
-        if ai:
-            print("Found AppInstance:", ai['name'])
+        found = find_app(api, args.name, args.id)
+        if found:
+            print("Found AppInstance:", found['name'])
             print("=============")
-            print(ai)
+            print(found)
         else:
             print("No AppInstance found matching name {} or id {}".format(
                 args.name, args.id))
             return FAILURE
     elif args.op == 'find-snap':
-        snap = find_snap(api, args.id)
-        if snap:
+        found = find_snap(api, args.id)
+        if found:
             print("Found Snapshot:", args.id)
             print("=============")
-            print(snap)
+            print(found)
         else:
             print("No Snapshot found matching name {} or id {}".format(
                 args.name, args.id))
             return FAILURE
+    elif args.op == 'find-from-mount':
+        if not args.mount:
+            raise ValueError("find-from-mount requires --path argument")
+        find_from_mount(api, args.mount)
+    elif args.op == 'find-from-device-path':
+        if not args.mount:
+            raise ValueError("find-from-device-path requires --path argument")
+        find_from_device_path(args.device_path)
+
+    if (args.mount or args.login) and found:
+        if hasattr(found, 'utc_ts'):
+            ai = new_app_from_snap(api, found)
+        else:
+            ai = api.app_instances.get(found.path.split('/')[1])
+        mount_volumes(api, [ai], not args.no_multipath, args.fstype,
+                      args.fsargs, args.directory, 1, args.login)
+    elif args.clean and found:
+        clean_mounts(api, [ai], args.directory, 1)
 
     return SUCCESS
 
@@ -265,13 +348,36 @@ if __name__ == '__main__':
     parser.add_argument('op', choices=('health-check',
                                        'make-snap',
                                        'list-snaps',
+                                       'list-snaps-pretty',
                                        'find-vol',
                                        'find-app',
                                        'find-snap',
+                                       'find-from-mount',
+                                       'find-from-device-path'
                                        'restore'))
     parser.add_argument('--name')
     parser.add_argument('--id')
-    parser.add_argument('--no-multipath')
+    parser.add_argument('--path')
+    parser.add_argument('--no-multipath', action='store_true')
+    parser.add_argument('--login', action='store_true',
+                        help='Login volumes (implied by --mount)')
+    parser.add_argument('--logout', action='store_true',
+                        help='Logout volumes (implied by --unmount)')
+    parser.add_argument('--mount', action='store_true',
+                        help='Mount volumes, (implies --login)')
+    parser.add_argument('--unmount', action='store_true',
+                        help='Unmount volumes only.  Does not delete volume')
+    parser.add_argument('--clean', action='store_true',
+                        help='Deletes volumes (implies --unmount and '
+                             '--logout)')
+    parser.add_argument('--fstype', default='xfs',
+                        help='Filesystem to use when formatting devices')
+    parser.add_argument('--fsargs', default='',
+                        help=hf('Extra args to give formatter, eg "-E '
+                                'lazy_table_init=1".  Make sure fstype matches'
+                                ' the args you are passing in'))
+    parser.add_argument('--directory', default='/mnt',
+                        help='Directory under which to mount devices')
 
     args = parser.parse_args()
     sys.exit(main(args))
