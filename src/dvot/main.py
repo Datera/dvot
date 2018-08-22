@@ -8,6 +8,7 @@ import sys
 import textwrap
 import threading
 import time
+import uuid
 try:
     import queue
 except ImportError:
@@ -22,9 +23,12 @@ FAILURE = 1
 MAX_WORKERS = 20
 
 
-VOL_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/storage_instances/"
-                         "(?P<si>.*)/volumes/(?P<vol>.*)/snapshots/(?P<ts>.*)")
-AI_SNAP_RE = re.compile("/app_instances/(?P<ai>.*)/snapshots/(?P<ts>.*)")
+VOL_SNAP_RE = re.compile(
+    r"/app_instances/(?P<ai>.*)/storage_instances/"
+    r"(?P<si>.*)/volumes/(?P<vol>.*)/snapshots/(?P<ts>.*)")
+AI_SNAP_RE = re.compile(r"/app_instances/(?P<ai>.*)/snapshots/(?P<ts>.*)")
+IQN_RE = re.compile(r"(?P<iqn>iqn.2013-\d\d\.com\.daterainc:tc:\d\d:\w\w:"
+                    r"[a-f0-9]+)-lun-(?P<lun>\d+)")
 
 
 def hf(txt):
@@ -59,11 +63,40 @@ def run_health(api):
     return True
 
 
+def _find_impl(api, func, args):
+    found = []
+    q = queue.Queue()
+    for ai in api.app_instances.list():
+        q.put(ai)
+    workers = max(q.qsize(), MAX_WORKERS)
+    for _ in range(workers):
+        thread = threading.Thread(target=func, args=(q, found, args))
+        thread.daemon = True
+        thread.start()
+    while not (q.unfinished_tasks == 0 or len(found) > 0):
+        time.sleep(0.2)
+    if found:
+        return found[0]
+
+
+def find_si(api, iqn):
+    def _si_helper(q, found, args):
+        iqn = args[0]
+        while len(found) == 0:
+            ai = q.get()
+            for si in ai.storage_instances.list():
+                if si.access['iqn'] == iqn:
+                    found.append(si)
+            q.task_done()
+    return _find_impl(api, _si_helper, [iqn])
+
+
 def find_vol(api, name, oid):
     if (name and oid) or (not name and not oid):
         raise ValueError("Either --name or --id MUST be provided")
 
-    def _vol_helper(q, found):
+    def _vol_helper(q, found, args):
+        oid, name = args
         while len(found) == 0:
             ai = q.get()
             for si in ai.storage_instances.list():
@@ -71,19 +104,7 @@ def find_vol(api, name, oid):
                     if vol['uuid'] == oid or vol['name'] == name:
                         found.append(vol)
             q.task_done()
-    found = []
-    q = queue.Queue()
-    for ai in api.app_instances.list():
-        q.put(ai)
-    workers = max(q.qsize(), MAX_WORKERS)
-    for _ in range(workers):
-        thread = threading.Thread(target=_vol_helper, args=(q, found))
-        thread.daemon = True
-        thread.start()
-    while not (q.unfinished_tasks == 0 or len(found) > 0):
-        time.sleep(0.2)
-    if found:
-        return found[0]
+    return _find_impl(api, _vol_helper, (oid, name))
 
 
 def find_snap(api, ts):
@@ -191,17 +212,40 @@ def restore(api, name, oid):
 
 def new_app_from_snap(api, snap):
     print("Creating new AppInstance:", snap.path)
-    name = 'ai-from-snap-{}'.format(snap['utc_ts'])
+    name = 'from-snap-{}-{}'.format(snap['utc_ts'], str(uuid.uuid4())[:8])
     return api.app_instances.create(name=name,
                                     clone_snapshot_src={'path': snap.path})
 
 
 def find_from_mount(api, mount):
-    pass
+    device = exe("df -P {} | tail -1 | cut -d' ' -f 1".format(mount)).strip()
+    if not device:
+        print("No device found for mount:", mount)
+    return find_from_device_path(api, device)
 
 
 def find_from_device_path(api, device_path):
-    pass
+    iqn, lun = iqn_lun_from_device(device_path)
+    si = find_si(api, iqn)
+    if not si:
+        print("No StorageInstance found for device path", device_path)
+        return
+    return si.volumes.list()[lun]
+
+
+def iqn_lun_from_device(device):
+    links = exe("udevadm info --query=symlink --name={}".format(
+        device)).split()
+    links = filter(lambda x: 'by-path' in x, links)
+    if len(links) == 0:
+        print("No /dev/disk/by-path link found for device:", device)
+        return None, None
+    link = links[0]
+    match = IQN_RE.search(link)
+    if not match:
+        print("No iqn found in link:", link)
+        return None, None
+    return match.group('iqn'), int(match.group('lun'))
 
 
 def _obj_poll(obj):
@@ -320,22 +364,32 @@ def main(args):
                 args.name, args.id))
             return FAILURE
     elif args.op == 'find-from-mount':
-        if not args.mount:
+        if not args.path:
             raise ValueError("find-from-mount requires --path argument")
-        find_from_mount(api, args.mount)
+        found = find_from_mount(api, args.path)
+        print("Found Volume:", found['name'])
+        print("============")
+        print(found)
     elif args.op == 'find-from-device-path':
-        if not args.mount:
+        if not args.path:
             raise ValueError("find-from-device-path requires --path argument")
-        find_from_device_path(args.device_path)
+        found = find_from_device_path(api, args.path)
+        print("Found Volume:", found['name'])
+        print("============")
+        print(found)
 
     if (args.mount or args.login) and found:
         if hasattr(found, 'utc_ts'):
             ai = new_app_from_snap(api, found)
         else:
-            ai = api.app_instances.get(found.path.split('/')[1])
+            ai = api.app_instances.get(found.path.split('/')[2])
         mount_volumes(api, [ai], not args.no_multipath, args.fstype,
                       args.fsargs, args.directory, 1, args.login)
     elif args.clean and found:
+        if hasattr(found, 'utc_ts'):
+            ai = new_app_from_snap(api, found)
+        else:
+            ai = api.app_instances.get(found.path.split('/')[2])
         clean_mounts(api, [ai], args.directory, 1)
 
     return SUCCESS
@@ -345,6 +399,24 @@ if __name__ == '__main__':
     tparser = scaffold.get_argparser(add_help=False)
     parser = argparse.ArgumentParser(
         parents=[tparser], formatter_class=argparse.RawTextHelpFormatter)
+    op_help = """Operation to perform
+* health-check
+    basic health check to ensure everything is functional
+* make-snap
+    create a Snapshot for the specified Volume or AppInstance
+* list-snaps
+    list all Snapshots available to the current tenant
+* list-snaps-pretty
+    prettier output for list-snaps. Might take a long time
+* find-vol
+    finds a Volume with the specified name or id
+* find-app
+    find an AppInstance with the specified name or id
+* find-from-mount
+    find a Volume from the specified mount path
+* find-from-device-path
+    same as find-from-mount but with device-path
+    """
     parser.add_argument('op', choices=('health-check',
                                        'make-snap',
                                        'list-snaps',
@@ -353,8 +425,8 @@ if __name__ == '__main__':
                                        'find-app',
                                        'find-snap',
                                        'find-from-mount',
-                                       'find-from-device-path'
-                                       'restore'))
+                                       'find-from-device-path',
+                                       'restore'), help=op_help)
     parser.add_argument('--name')
     parser.add_argument('--id')
     parser.add_argument('--path')
