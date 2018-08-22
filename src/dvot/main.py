@@ -176,7 +176,8 @@ def make_snap(api, name, oid):
         return vol.snapshots.create()
 
 
-def restore(api, name, oid, path, directory, multipath, fstype, fsargs, login):
+def rollback(api, name, oid, path, directory, multipath, fstype, fsargs,
+             login):
     if not any((name, oid)) and not all((name, oid)):
         raise ValueError(
             "One of --name, --id of the snapshot MUST be provided")
@@ -342,9 +343,10 @@ def main(args):
             print("No AppInstance or Volume found with name {} or id {}"
                   "".format(args.name, args.id))
             return FAILURE
-    elif args.op == 'restore':
-        restore(api, args.name, args.id, args.path, args.directory,
-                not args.no_multipath, args.fstype, args.fsargs, args.login)
+    elif args.op == 'rollback':
+        rollback(api, args.name, args.id, args.path, args.directory,
+                 not args.no_multipath, args.fstype, args.fsargs, args.login)
+        return SUCCESS
     elif args.op == 'find-vol':
         found = find_vol(api, args.name, args.id)
         if found:
@@ -427,8 +429,8 @@ if __name__ == '__main__':
     find a Volume from the specified mount path
 * find-from-device-path
     same as find-from-mount but with device-path
-* restore
-    restore a volume to a snapshot.
+* rollback
+    rollback a volume to a snapshot.
     """
     parser.add_argument('op', choices=('health-check',
                                        'make-snap',
@@ -439,7 +441,7 @@ if __name__ == '__main__':
                                        'find-snap',
                                        'find-from-mount',
                                        'find-from-device-path',
-                                       'restore'), help=op_help)
+                                       'rollback'), help=op_help)
     parser.add_argument('--name')
     parser.add_argument('--id')
     parser.add_argument('--path')
