@@ -111,6 +111,7 @@ Snapshots that are requested for mounting will first be cloned into a new
 AppInstance, then all volumes within that AppInstance (one for a single-Volume
 Snapshot or multiple for an AppInstance Snapshot) will be logged-in/mounted
 
+### Mounting a single snapshot
 ```bash
 ./dvot find-snap --id <my-snap-uuid> --login
 ```
@@ -118,23 +119,29 @@ Snapshot or multiple for an AppInstance Snapshot) will be logged-in/mounted
 ./dvot find-snap --id <my-snap-uuid> --mount --fstype xfs --directory /mnt
 ```
 
+### Mounting all snapshots in an AppInstance
+
+```bash
+./dvot find-app --id <my-snap-uuid> --mount --all-snaps
+```
+
 ## Restoring Snapshots
 
 ### Restoring an Unmounted Volume or AppInstance
 
 ```bash
-./dvot restore --id <snap-uuid>
+./dvot rollback --id <snap-uuid>
 ```
 ```bash
-./dvot restore --name <snap-timestamp>
+./dvot rollback --name <snap-timestamp>
 ```
 
 ### Restoring a Mounted Volume or AppInstance
 
-In this case mounts will be unmounted, the device will be logged out a restore
+In this case mounts will be unmounted, the device will be logged out a rollback
 of the Volume/AppInstance is completed, then the device is logged back in
 and remounted (if it started as a mount)
 
 ```bash
-./dvot restore --name <snap-ts> --path <mount-or-device-path>
+./dvot rollback --name <snap-ts> --path <mount-or-device-path>
 ```
