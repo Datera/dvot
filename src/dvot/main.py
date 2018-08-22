@@ -15,6 +15,7 @@ except ImportError:
     import Queue as queue
 
 from dfs_sdk import scaffold
+from dfs_sdk import exceptions as dexceptions
 from dvot.utils import exe, Parallel
 from dvot.mount import mount_volumes, clean_mounts
 
@@ -148,14 +149,32 @@ def find_app(api, name, oid):
             return ai
 
 
-def find_snaps(api):
-    def _snap_helper(ai, app_snaps, vol_snaps):
-        app_snaps.extend(ai.snapshots.list())
+def find_snaps(api, name, oid):
+    if (name and oid):
+        raise ValueError("Only one of --name or --id can be provided")
+
+    def _snap_helper(ai, vid, app_snaps, vol_snaps):
+        if not vid:
+            app_snaps.extend(ai.snapshots.list())
         for si in ai.storage_instances.list():
             for vol in si.volumes.list():
-                vol_snaps.extend(vol.snapshots.list())
+                if vid:
+                    if vol.uuid == vid or vol.name == vid:
+                        vol_snaps.extend(vol.snapshots.list())
+                else:
+                    vol_snaps.extend(vol.snapshots.list())
+    oid = name if name else oid
     app_snaps, vol_snaps = [], []
-    args_list = [(ai, app_snaps, vol_snaps)
+    found = None
+    vid = None
+    if oid:
+        try:
+            found = api.app_instances.get(oid)
+            _snap_helper(found, None, app_snaps, vol_snaps)
+            return app_snaps, vol_snaps
+        except dexceptions.ApiNotFoundError:
+            vid = oid
+    args_list = [(ai, vid, app_snaps, vol_snaps)
                  for ai in api.app_instances.list()]
     funcs = [_snap_helper] * len(args_list)
     p = Parallel(funcs,
@@ -274,6 +293,17 @@ def _obj_poll(obj):
         timeout -= 1
 
 
+def print_snaps(app_snaps, vol_snaps):
+    print("App Snaps")
+    print("=========")
+    for snap in app_snaps:
+        print(snap.path, snap.op_state)
+    print("\nVol Snaps")
+    print("=========")
+    for snap in vol_snaps:
+        print(snap.path, snap.op_state)
+
+
 def print_pretty_snaps(api, app_snaps, vol_snaps):
     def _psnap_helper(api, snap, results):
         path = snap.path
@@ -323,17 +353,10 @@ def main(args):
     if args.op == 'health-check':
         run_health(api)
     elif args.op == 'list-snaps':
-        app_snaps, vol_snaps = find_snaps(api)
-        print("App Snaps")
-        print("=========")
-        for snap in app_snaps:
-            print(snap.path, snap.op_state)
-        print("\nVol Snaps")
-        print("=========")
-        for snap in vol_snaps:
-            print(snap.path, snap.op_state)
+        app_snaps, vol_snaps = find_snaps(api, args.name, args.id)
+        print_snaps(app_snaps, vol_snaps)
     elif args.op == 'list-snaps-pretty':
-        app_snaps, vol_snaps = find_snaps(api)
+        app_snaps, vol_snaps = find_snaps(api, args.name, args.id)
         print_pretty_snaps(api, app_snaps, vol_snaps)
     elif args.op == 'make-snap':
         found = make_snap(api, args.name, args.id)
