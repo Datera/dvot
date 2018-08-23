@@ -344,6 +344,27 @@ def print_pretty_snaps(api, app_snaps, vol_snaps):
         print(snap)
 
 
+def set_placement(api, volume, placement):
+    if 'volumes' not in volume.path or 'snapshots' in volume.path:
+        raise ValueError(
+            "placement_mode can only be set for Volume objects. Requested "
+            "object is not a volume.  Path: {}".format(volume.path))
+    print("Setting placement mode of volume {} to {}".format(
+        volume.path, placement))
+    volume.set(placement_mode=placement)
+
+
+def set_repair_priority(api, ai, repair_priority):
+    if 'volumes' in ai.path or 'snapshots' in ai.path:
+        raise ValueError(
+            "repair_priority can only be set for AppInstance objects. "
+            "Requested object is not an AppInstance.  Path: {}".format(
+                ai.path))
+    print("Setting repair_priority of AppInstance {} to {}".format(
+        ai.path, repair_priority))
+    ai.set(repair_priority=repair_priority)
+
+
 def main(args):
     api = scaffold.get_api()
     print('Using Config:')
@@ -375,7 +396,6 @@ def main(args):
         if found:
             print("Found volume:", found['name'])
             print("=============")
-            print(found)
         else:
             print("No volume found matching name {} or id {}".format(
                 args.name, args.id))
@@ -385,7 +405,6 @@ def main(args):
         if found:
             print("Found AppInstance:", found['name'])
             print("=============")
-            print(found)
         else:
             print("No AppInstance found matching name {} or id {}".format(
                 args.name, args.id))
@@ -395,7 +414,6 @@ def main(args):
         if found:
             print("Found Snapshot:", args.id)
             print("=============")
-            print(found)
         else:
             print("No Snapshot found matching name {} or id {}".format(
                 args.name, args.id))
@@ -412,12 +430,20 @@ def main(args):
         found = find_from_device_path(args.path)
         print("Found Volume:", found['name'])
         print("============")
-        print(found)
+
+    print(found)
+
+    if args.placement_mode:
+        set_placement(api, found, args.placement_mode)
+
+    if args.repair_priority:
+        set_repair_priority(api, found, args.repair_priority)
 
     if (args.mount or args.login) and found:
         ais = []
         if hasattr(found, 'utc_ts'):
             ai = new_app_from_snap(api, found)
+            ais.append(ai)
         else:
             ai = api.app_instances.get(found.path.split('/')[2])
             if args.all_snaps:
@@ -475,6 +501,10 @@ if __name__ == '__main__':
     parser.add_argument('--name')
     parser.add_argument('--id')
     parser.add_argument('--path')
+    parser.add_argument('--placement-mode', choices=[
+        'hybrid', 'all_flash', 'single_flash'])
+    parser.add_argument('--repair-priority', choices=[
+        'default', 'low', 'medium', 'high'])
     parser.add_argument('--no-multipath', action='store_true')
     parser.add_argument('--login', action='store_true',
                         help='Login volumes (implied by --mount)')
@@ -496,7 +526,12 @@ if __name__ == '__main__':
     parser.add_argument('--directory', default='/mnt',
                         help='Directory under which to mount devices')
     parser.add_argument('--all-snaps', action='store_true',
-                        help='For use with --mount/--login')
+                        help=hf('For use with --mount/--login.  This will '
+                                'mount all snapshots within the AppInstance.  '
+                                'Current limitation is if you want only a '
+                                'single-Volume\'s snapshots mounted, that '
+                                'Volume needs to be in an AppInstance by '
+                                'itself'))
 
     args = parser.parse_args()
     sys.exit(main(args))
