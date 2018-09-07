@@ -45,6 +45,27 @@ Functionality can be broken down into a few categories
 * Mounting Snapshots
 * Restoring Snapshots
 
+### Basics
+
+Every operation in dvot follows a pattern:
+
+``./dvot <find/list operation> --<id/name/path> <my-id/my-name/my-path> --<state-change operation>``
+
+For example:
+
+```bash
+$ ./dvot find-vol --id 33c04b21-0fa1-46ab-a8ea-035bb9d806b4 --make-snap
+```
+
+or
+
+```bash
+$ ./dvot find-app --name my-test-app --mount
+```
+
+Every "find" operation should have a single result that will be the object of
+any state-change operation
+
 ### Health Check
 
 The health check is very basic.  It checks that the tool has API access and
@@ -58,11 +79,11 @@ Health Check Completed Successfully
 ## Creating Snapshots
 
 ```bash
-./dvot make-snap --id <my-vol-or-ai-id>
+./dvot find-vol --id <my-vol-id> --make-snap
 ```
 or
 ```bash
-./dvot make-snap --name <my-vol-or-ai-name>
+./dvot find-app --name <my-app-name> --make-snap
 ```
 WARNING: Only use ``--name`` with a guaranteed unique name.  Use the UUID of
 the Volume/AppInstance if unsure if the name is unique.
@@ -130,10 +151,10 @@ Snapshot or multiple for an AppInstance Snapshot) will be logged-in/mounted
 ### Restoring an Unmounted Volume or AppInstance
 
 ```bash
-./dvot rollback --id <snap-uuid>
+./dvot find-vol --id <volume-uuid> --rollback <snap-id>
 ```
 ```bash
-./dvot rollback --name <snap-timestamp>
+./dvot find-app -id <app-id> --rollback <snap-timestamp>
 ```
 
 ### Restoring a Mounted Volume or AppInstance
@@ -144,4 +165,17 @@ and remounted (if it started as a mount)
 
 ```bash
 ./dvot rollback --name <snap-ts> --path <mount-or-device-path>
+```
+
+### Extending a Volume
+
+```bash
+./dovt find-vol --id <volume-uuid> --extend 20
+```
+
+Mounted volumes will be unmounted, the device will be logged out and the Volume
+will be extended to the specified size.
+
+```bash
+./dovt find-from-mount --path <mount-or-device-path> --extend 20
 ```

@@ -263,7 +263,7 @@ def _logout(iqn, portals):
     dprint("Logout complete")
 
 
-def _find_mount(ai, si, lun, multipath):
+def find_mount(si, lun, multipath):
     ip = si.access['ips'][0]
     iqn = si.access['iqn']
     path = DEV_TEMPLATE.format(ip=ip, iqn=iqn, lun=lun)
