@@ -443,7 +443,7 @@ def main(args):
     elif args.op == 'find-from-device-path':
         if not args.path:
             raise ValueError("find-from-device-path requires --path argument")
-        found = find_from_device_path(args.path)
+        found = find_from_device_path(api, args.path)
         print("Found Volume:", found['name'])
         print("============")
 
