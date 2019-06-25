@@ -194,11 +194,14 @@ def new_app_from_snap(api, snap):
                                     clone_snapshot_src={'path': snap.path})
 
 
-def find_from_mount(api, mount):
+def find_from_mount(api, mount, t):
     device = exe("df -P {} | tail -1 | cut -d' ' -f 1".format(mount)).strip()
     if not device:
         print("No device found for mount:", mount)
-    return find_from_device_path(api, device)
+    if t == 'ai':
+        return find_ai_from_device_path(api, device)
+    else:
+        return find_from_device_path(api, device)
 
 
 def find_from_device_path(api, device_path):
@@ -208,6 +211,16 @@ def find_from_device_path(api, device_path):
         print("No StorageInstance found for device path", device_path)
         return
     return si.volumes.list()[lun]
+
+
+def find_ai_from_device_path(api, device_path):
+    iqn, lun = iqn_lun_from_device(device_path)
+    si = find_si(api, iqn)
+    if not si:
+        print("No StorageInstance found for device path", device_path)
+        return
+    ai_uuid = si.path.split('/')[2]
+    return api.app_instances.get(ai_uuid)
 
 
 def iqn_lun_from_device(device):
@@ -437,14 +450,26 @@ def main(args):
     elif args.op == 'find-from-mount':
         if not args.path:
             raise ValueError("find-from-mount requires --path argument")
-        found = find_from_mount(api, args.path)
+        found = find_from_mount(api, args.path, 'vol')
         print("Found Volume:", found['name'])
+        print("============")
+    elif args.op == 'find-ai-from-mount':
+        if not args.path:
+            raise ValueError("find-from-mount requires --path argument")
+        found = find_from_mount(api, args.path, 'ai')
+        print("Found AppInstance:", found['name'])
         print("============")
     elif args.op == 'find-from-device-path':
         if not args.path:
             raise ValueError("find-from-device-path requires --path argument")
         found = find_from_device_path(api, args.path)
         print("Found Volume:", found['name'])
+        print("============")
+    elif args.op == 'find-ai-from-device-path':
+        if not args.path:
+            raise ValueError("find-from-device-path requires --path argument")
+        found = find_ai_from_device_path(api, args.path)
+        print("Found AppInstance:", found['name'])
         print("============")
 
     print(found)
@@ -526,6 +551,8 @@ if __name__ == '__main__':
     find a Volume from the specified mount path
 * find-from-device-path
     same as find-from-mount but with device-path
+* find-ai-from-mount
+* find-ai-from-device-path
     """
     parser.add_argument('op', choices=('health-check',
                                        'list-snaps',
@@ -534,7 +561,9 @@ if __name__ == '__main__':
                                        'find-app',
                                        'find-snap',
                                        'find-from-mount',
-                                       'find-from-device-path'
+                                       'find-from-device-path',
+                                       'find-ai-from-mount',
+                                       'find-ai-from-device-path'
                                        ), help=op_help)
     parser.add_argument('--name')
     parser.add_argument('--id')
