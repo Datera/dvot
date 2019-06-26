@@ -5,7 +5,8 @@ Datera Volume Operations Tool
 
 This is meant to ease several multi-step end-user operations for the Datera
 system that encompass both Datera-side operations and client-side operations.
-Most of the operations supported in this tool involve snapshots.
+Most of the operations supported in this tool involve snapshots or discovery
+operations.
 
 ## What Do?
 
@@ -15,7 +16,6 @@ Most of the operations supported in this tool involve snapshots.
     - Install ``open-iscsi`` (we need ``iscsiadm``)
     - Install ``multipath-tools`` (or whatever it is on your system)
     - Install ``mkfs.<your_favorite_format>``
-    - Install ``fio`` (make sure it's accessible via $PATH)
 * Clone the repository
     - ``git clone http://github.com/Datera/dvot``
     - ``cd dvot``
@@ -29,7 +29,8 @@ Most of the operations supported in this tool involve snapshots.
         "password": "your_password",
         "tenant": "/root",
         "mgmt_ip": "1.1.1.1",
-        "api_version": "2.2"
+        "api_version": "2.2",
+        "ldap": ""
     }
     ```
 * Use
@@ -61,6 +62,11 @@ or
 
 ```bash
 $ ./dvot find-app --name my-test-app --mount
+```
+
+or
+```bash
+$ ./dvot find-from-device-path --path /dev/sdc
 ```
 
 Every "find" operation should have a single result that will be the object of
@@ -115,6 +121,14 @@ entire AppInstance (and all included Volumes)
 ```
 ```bash
 ./dvot find-app --id <my-app-id>
+```
+
+```bash
+./dvot find-ai-from-mount --path <mount-path>
+```
+
+```bash
+./dvot find-ai-from-device-path --path <device-path>
 ```
 
 ### Snapshots
