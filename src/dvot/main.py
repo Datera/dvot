@@ -228,8 +228,19 @@ def iqn_lun_from_device(device):
         device)).split()
     links = filter(lambda x: 'by-path' in x, links)
     if len(links) == 0:
-        print("No /dev/disk/by-path link found for device:", device)
-        return None, None
+        if re.search('mapper',device):
+           dmpath= exe("udevadm info --query=path --name={}".format(device))
+           dmdev = dmpath.split("/")[-1].strip()
+        elif re.search('dm',device):
+           dmdev = device.split("/")[-1]
+        else:
+           print("No /dev/disk/by-path link found for device:", device)
+           return None, None
+        slaves = exe("ls /sys/block/{}/slaves".format(dmdev))
+        slave = slaves.split()[1]
+    links = exe("udevadm info --query=symlink --name=/dev/{}".format(
+        slave)).split()
+    links = filter(lambda x: 'by-path' in x, links)
     link = links[0]
     match = IQN_RE.search(link)
     if not match:
